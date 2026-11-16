@@ -1,0 +1,20 @@
+# cache de resultados (contém dados de execuções locais)
+.cache_cupons.jsonl
+
+# saídas
+resultados.csv
+resultados.json
+*.csv
+*.json
+!exemplos/*.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# editores e sistema
+.vscode/
+.idea/
+.DS_Store
