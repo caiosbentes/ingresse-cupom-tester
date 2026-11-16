@@ -130,6 +130,14 @@ requisição `POST .../v1/events/<ID>/tickets` mostra, no Payload, o `event_id` 
 Vale rodar `--info` primeiro: se aparecer `aceita cupom: não`, o evento
 provavelmente não aceita código nenhum, e não adianta testar lista.
 
+### Cupom vale por evento, não por produtora
+
+Cada código é cadastrado num evento específico. Um cupom de 50% que funciona num
+evento da Roma Tickets não funciona no outro evento da mesma produtora — testado
+com `ROMAEVENTOS` (válido na Intro Belém, inválido no NOEL Festival) e com
+`HYPE24HSINTRO`. Na prática: a lista de códigos precisa ser montada evento por
+evento, usando o nome da festa, o line-up, o lote e as campanhas daquele evento.
+
 ### Opções
 
 | Opção | Padrão | Descrição |
@@ -166,6 +174,7 @@ INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
 | Código | Significado |
 | --- | --- |
 | `0` | tudo testado |
+| `1` | erro de configuração: ID de evento inválido ou API indisponível no `--info` |
 | `2` | alguma requisição não concluiu (rede/500) |
 | `3` | API bloqueou por excesso de requisições (HTTP 429) |
 
