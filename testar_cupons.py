@@ -135,6 +135,8 @@ def descobrir_evento(event, api_base, timeout=20):
     if not j:
         return None
     data = j.get("data") or j
+    if not isinstance(data, dict) or not data.get("name"):
+        return None  # resposta não parece um evento (ID errado ou recurso diferente)
     org = data.get("organization") or {}
     return {
         "id": data.get("id") or event,
@@ -295,7 +297,8 @@ def main():
             log(f"aceita cupom: {'sim' if info['has_coupon'] else 'não informado'} | "
                 f"pede passkey: {'sim' if info['has_passkey'] else 'não'}")
         elif args.info:
-            sys.exit("não consegui consultar o evento (API fora do ar, rate limit ou ID errado)")
+            sys.exit("não consegui consultar o evento: confira o ID na URL do carrinho "
+                     "(cart.ingresse.com/<ID>/tickets) ou se a API está bloqueando.")
 
     if args.info:
         sys.exit(0)
