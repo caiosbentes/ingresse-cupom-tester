@@ -9,8 +9,11 @@ que a produtora divulgou?"* Em vez de digitar código por código no site, o scr
 dispara a mesma validação que a página faz, em paralelo, e devolve uma tabela.
 
 ```
-$ python3 testar_cupons.py cupons.txt
+$ python3 testar_cupons.py cupons.txt --url https://cart.ingresse.com/<id>/tickets
 
+evento: Intro Belém (Esplanada Mangueirão)
+produtora: Roma Tickets — c113d324-4009-4388-9a4b-accef90e246b
+aceita cupom: sim | pede passkey: sim
 códigos: 500 | já testados: 0 | a testar: 500
   500/500 (29/s, ETA 0s)
 
@@ -57,7 +60,7 @@ código → processo curl → TLS 1,2 s  códigos → 1 processo curl (--paralle
 Medições na mesma lista de 503 códigos, contra a API real:
 
 | Configuração | Tempo | Velocidade |
-|---|---|---|
+| --- | --- | --- |
 | 1 processo `curl` por código, 4 threads | 286 s | 1,7 códigos/s |
 | Lote paralelo, 30 simultâneas | 16,7 s | 30 códigos/s |
 | Lote paralelo, 40 simultâneas | 20,7 s | 24 códigos/s |
@@ -69,6 +72,7 @@ boa é 20–30.
 ## Requisitos
 
 - Python 3.8+ (só biblioteca padrão, sem `pip install`)
+
 - `curl` 7.66+ com suporte a HTTP/2 (`curl --version` deve mostrar `HTTP2`)
 
 ## Instalação
@@ -93,16 +97,46 @@ Várias listas de uma vez, com saídas nomeadas:
 python3 testar_cupons.py lista1.txt lista2.txt --workers 30 --out-csv r.csv --out-json r.json
 ```
 
-Outro evento (o ID está na URL do carrinho: `cart.ingresse.com/<EVENT_ID>/tickets`):
+Outro evento — passe só o link do carrinho e o script descobre o resto:
+
+```bash
+python3 testar_cupons.py cupons.txt --url "https://cart.ingresse.com/<EVENT_ID>/tickets"
+```
+
+Ver os dados do evento antes de rodar (nome, local, produtora e se aceita cupom):
+
+```bash
+python3 testar_cupons.py cupons.txt --url "https://cart.ingresse.com/<EVENT_ID>/tickets" --info
+```
+
+Se preferir informar os IDs na mão:
 
 ```bash
 python3 testar_cupons.py cupons.txt --event OUTRO_ID --producer OUTRO_ID
 ```
 
+## De onde vêm os IDs de outro evento
+
+| Dado | Onde achar | Observação |
+| --- | --- | --- |
+| `event_id` | URL do carrinho: `cart.ingresse.com/<EVENT_ID>/tickets` | Abra o evento na Ingresse ou o link que a produtora divulga e clique em comprar |
+| `producer_id` | campo `data.organization.id` da resposta de `GET /v1/events/<EVENT_ID>` | O script descobre sozinho com `--url` ou `--event` |
+
+O caminho manual, sem o script: abra o carrinho no navegador, aperte F12, vá em
+**Network**, filtre por `tickets` e clique em "Aplicar" num cupom qualquer. A
+requisição `POST .../v1/events/<ID>/tickets` mostra, no Payload, o `event_id` e o
+`producer_id` que o próprio site usa.
+
+Vale rodar `--info` primeiro: se aparecer `aceita cupom: não`, o evento
+provavelmente não aceita código nenhum, e não adianta testar lista.
+
 ### Opções
 
 | Opção | Padrão | Descrição |
-|---|---|---|
+| --- | --- | --- |
+| `--url` | — | link do carrinho ou ID do evento (descobre a produtora) |
+| `--event` / `--producer` | Intro Belém | IDs informados manualmente |
+| `--info` | — | mostra os dados do evento e sai, sem testar |
 | `--workers` | `12` | requisições simultâneas (20–30 é o ponto ideal) |
 | `--chunk` | `150` | códigos por lote do `curl` |
 | `--pause` | `1.0` | pausa entre lotes, em segundos |
@@ -111,7 +145,6 @@ python3 testar_cupons.py cupons.txt --event OUTRO_ID --producer OUTRO_ID
 | `--cache` | `.cache_cupons.jsonl` | arquivo de cache/retomada |
 | `--no-cache` | — | não lê nem grava cache |
 | `--retest` | — | reprocessa códigos já cacheados |
-| `--event` / `--producer` | Intro Belém | IDs do evento e da produtora |
 | `--api-base` | API da Ingresse | base alternativa (usada nos testes com mock) |
 | `--out-csv` / `--out-json` | `resultados.csv` / `resultados.json` | arquivos de saída |
 | `--quiet` | — | sem barra de progresso |
@@ -120,7 +153,7 @@ python3 testar_cupons.py cupons.txt --event OUTRO_ID --producer OUTRO_ID
 
 `resultados.csv`:
 
-```csv
+```
 codigo,valido,desconto_pct,tipo,usos,max_usos,max_por_usuario,inicio,fim,status,mensagem
 ROMAEVENTOS,SIM,50,percentage,2,100,2,,,active,válido
 INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
@@ -131,7 +164,7 @@ INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
 ### Códigos de saída
 
 | Código | Significado |
-|---|---|
+| --- | --- |
 | `0` | tudo testado |
 | `2` | alguma requisição não concluiu (rede/500) |
 | `3` | API bloqueou por excesso de requisições (HTTP 429) |
@@ -160,15 +193,22 @@ prolonga o bloqueio. Se precisar de mais volume, aumente `--pause`, reduza
 
 ## Testes
 
-O repositório inclui um servidor falso (`mock_api.py`) que imita a validação:
-responde válido para `ROMAEVENTOS` e `HYPE24HSINTRO`, inválido para o resto, 429
-para códigos que começam com `RL` e 500 para os que começam com `ERR`. Assim dá
-para validar mudanças sem gastar requisições reais.
+O repositório inclui um servidor falso (`mock_api.py`) que imita a API:
+
+- `POST /v1/events/<id>/tickets` — válido para `ROMAEVENTOS` e `HYPE24HSINTRO`, inválido para o resto
+
+- `GET /v1/events/<id>` — devolve os dados do evento, com `organization.id` como produtora
+
+- códigos começando com `RL` recebem 429; com `ERR`, 500
+
+Assim dá para validar mudanças sem gastar requisições reais:
 
 ```bash
 python3 mock_api.py &                     # sobe em 127.0.0.1:8765
+
 python3 testar_cupons.py exemplos/cupons_exemplo.txt \
-    --api-base http://127.0.0.1:8765 --event teste --no-cache --workers 5
+    --url https://cart.ingresse.com/11111111-2222-3333-4444-555555555555/tickets \
+    --api-base http://127.0.0.1:8765 --no-cache --workers 5
 ```
 
 Saída esperada: os dois cupons válidos detectados, o resto inválido, código de
@@ -177,11 +217,13 @@ saída `0`.
 ## Limitações
 
 - Cupons presos a um CPF ou conta específica não validam como visitante (a API
-  aceita `user_document` e `user_id`, que o script envia vazios). Se a produção
-  distribuiu um código nominal, ele pode funcionar logado mesmo dando inválido aqui.
+aceita `user_document` e `user_id`, que o script envia vazios). Se a produção
+distribuiu um código nominal, ele pode funcionar logado mesmo dando inválido aqui.
+
 - O script não compra nada: só consulta a validação do código.
+
 - A API pode mudar sem aviso; se os resultados vierem todos "inválidos" de repente,
-  confira com um código que você sabe que funciona.
+confira com um código que você sabe que funciona.
 
 ## Aviso
 
