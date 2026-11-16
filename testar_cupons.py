@@ -9,6 +9,11 @@ dispara essa mesma chamada para uma lista de códigos usando UM processo curl po
 lote, em modo --parallel com HTTP/2 multiplexado e gzip. Assim some o custo de
 abrir processo + handshake TLS (~1,2 s) por código, que era o maior gargalo.
 
+Os dados do evento (event_id e producer_id) podem vir de três formas:
+  --url <link do carrinho>   extrai o event_id e descobre o resto sozinho
+  --event <id>               descobre o producer_id pela API do evento
+  --event <id> --producer <id>   informa tudo manualmente
+
 O script também respeita o rate limit do Cloudflare: se a API responder 429, ele
 lê o Retry-After, grava o progresso no cache e para — em vez de insistir e
 prolongar o bloqueio.
@@ -16,9 +21,10 @@ prolongar o bloqueio.
 Uso
 ---
     python3 testar_cupons.py cupons.txt
-    python3 testar_cupons.py lista1.txt lista2.txt --workers 12 --out-csv r.csv
-    python3 testar_cupons.py cupons.txt --event OUTRO_ID --producer OUTRO_ID
-    python3 testar_cupons.py cupons.txt --retest          # ignora o cache
+    python3 testar_cupons.py cupons.txt --url https://cart.ingresse.com/<id>/tickets
+    python3 testar_cupons.py cupons.txt --event <id> --workers 30 --out-csv r.csv
+    python3 testar_cupons.py cupons.txt --info        # só mostra os dados do evento
+    python3 testar_cupons.py cupons.txt --retest      # ignora o cache
     python3 testar_cupons.py cupons.txt --api-base http://127.0.0.1:8765   # teste local
 
 Códigos de saída: 0 ok | 2 falhas | 3 bloqueado por rate limit
@@ -27,6 +33,7 @@ Códigos de saída: 0 ok | 2 falhas | 3 bloqueado por rate limit
 import argparse
 import csv
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -87,6 +94,58 @@ def carregar_cache(caminho):
 def esc(s: str) -> str:
     """Escapa valor para arquivo de configuração do curl."""
     return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def extrair_event_id(valor: str) -> str:
+    """Aceita o link do carrinho ou o próprio ID do evento."""
+    valor = valor.strip()
+    m = re.search(r"cart\.ingresse\.com/([0-9a-fA-F-]{36})", valor)
+    if m:
+        return m.group(1).lower()
+    if re.fullmatch(r"[0-9a-fA-F-]{36}", valor):
+        return valor.lower()
+    sys.exit(
+        "não identifiquei o ID do evento em "
+        f"'{valor}'.\n"
+        "Use o link do carrinho (cart.ingresse.com/<ID>/tickets) ou passe o ID direto."
+    )
+
+
+def curl_get(url, timeout=20):
+    """GET simples via curl (o requests do Python é bloqueado pelo Cloudflare)."""
+    proc = subprocess.run(
+        ["curl", "-s", "-m", str(timeout), "-H", "accept: application/json",
+         "-H", "authorization;", "-H", "origin: https://cart.ingresse.com",
+         "-H", "referer: https://cart.ingresse.com/", url],
+        capture_output=True, text=True,
+    )
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def descobrir_evento(event, api_base, timeout=20):
+    """
+    Consulta GET /v1/events/{id} e devolve os dados que importam:
+    nome, produtora, se aceita cupom e se pede passkey.
+    Retorna None se a API não responder como esperado.
+    """
+    j = curl_get(f"{api_base.rstrip('/')}/v1/events/{event}", timeout)
+    if not j:
+        return None
+    data = j.get("data") or j
+    org = data.get("organization") or {}
+    return {
+        "id": data.get("id") or event,
+        "name": data.get("name"),
+        "slug": data.get("slug"),
+        "producer_id": org.get("id"),
+        "producer_name": org.get("name"),
+        "has_coupon": data.get("has_coupon"),
+        "has_passkey": data.get("has_passkey"),
+        "place": (data.get("place") or {}).get("name"),
+    }
 
 
 # ---------------------------------------------------------------------- runner
@@ -203,8 +262,10 @@ def interpretar(codigo, status, texto):
 def main():
     ap = argparse.ArgumentParser(description="Testa códigos de cupom no checkout da Ingresse.")
     ap.add_argument("listas", nargs="+", help="arquivo(s) com códigos (um por linha)")
-    ap.add_argument("--event", default=DEFAULT_EVENT, help="ID do evento")
-    ap.add_argument("--producer", default=DEFAULT_PRODUCER, help="ID da produtora")
+    ap.add_argument("--url", help="link do carrinho (cart.ingresse.com/<id>/tickets) ou ID do evento")
+    ap.add_argument("--event", default=None, help="ID do evento (se não usar --url)")
+    ap.add_argument("--producer", default=None, help="ID da produtora (descobre sozinho se omitido)")
+    ap.add_argument("--info", action="store_true", help="mostra os dados do evento e sai")
     ap.add_argument("--api-base", default=DEFAULT_API, help="base da API (para testes locais)")
     ap.add_argument("--workers", type=int, default=12,
                     help="requisições simultâneas (padrão 12; acima de ~40 a Cloudflare bloqueia)")
@@ -220,7 +281,31 @@ def main():
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
-    url = f"{args.api_base.rstrip('/')}/v1/events/{args.event}/tickets"
+    log = (lambda *a: None) if args.quiet else print
+
+    # ------------------------------------------------------ evento e produtora
+    event = extrair_event_id(args.url) if args.url else (args.event or DEFAULT_EVENT)
+
+    info = None
+    if args.info or not args.producer:
+        info = descobrir_evento(event, args.api_base, args.timeout)
+        if info:
+            log(f"evento: {info['name']} ({info['place'] or 'local não informado'})")
+            log(f"produtora: {info['producer_name']} — {info['producer_id']}")
+            log(f"aceita cupom: {'sim' if info['has_coupon'] else 'não informado'} | "
+                f"pede passkey: {'sim' if info['has_passkey'] else 'não'}")
+        elif args.info:
+            sys.exit("não consegui consultar o evento (API fora do ar, rate limit ou ID errado)")
+
+    if args.info:
+        sys.exit(0)
+
+    producer = args.producer or (info or {}).get("producer_id") or DEFAULT_PRODUCER
+    if not args.producer and info and not info.get("producer_id"):
+        log("aviso: não descobri o producer_id; usando o padrão do projeto "
+            "(informe com --producer se o evento for de outra produtora)")
+
+    url = f"{args.api_base.rstrip('/')}/v1/events/{event}/tickets"
     t0 = time.time()
 
     codigos = carregar_codigos(args.listas)
@@ -231,7 +316,6 @@ def main():
     cache = {} if (args.no_cache or args.retest) else carregar_cache(cache_path)
     pendentes = [c for c in codigos if c not in cache]
 
-    log = (lambda *a: None) if args.quiet else print
     log(f"códigos: {len(codigos)} | já testados: {len(codigos) - len(pendentes)} | a testar: {len(pendentes)}")
 
     resultados = dict(cache)
@@ -251,7 +335,7 @@ def main():
         processados = 0
         for inicio in range(0, len(pendentes), args.chunk):
             lote = pendentes[inicio:inicio + args.chunk]
-            respostas, retry_after = rodar_lote(lote, url, args.event, args.producer, workers, args.timeout)
+            respostas, retry_after = rodar_lote(lote, url, event, producer, workers, args.timeout)
 
             bloqueio_lote = False
             for c in lote:
@@ -299,7 +383,7 @@ def main():
         time.sleep(min(2 ** tentativa, 8))
         lote, falhas = falhas, []
         log(f"  retry {tentativa}: {len(lote)} códigos")
-        respostas, retry_after = rodar_lote(lote, url, args.event, args.producer, max(4, workers // 2), args.timeout)
+        respostas, retry_after = rodar_lote(lote, url, event, producer, max(4, workers // 2), args.timeout)
         for c in lote:
             st, corpo = respostas.get(c, (0, None))
             reg, tipo = interpretar(c, st, corpo)
