@@ -127,8 +127,20 @@ O caminho manual, sem o script: abra o carrinho no navegador, aperte F12, vá em
 requisição `POST .../v1/events/<ID>/tickets` mostra, no Payload, o `event_id` e o
 `producer_id` que o próprio site usa.
 
-Vale rodar `--info` primeiro: se aparecer `aceita cupom: não`, o evento
-provavelmente não aceita código nenhum, e não adianta testar lista.
+Rode `--info` primeiro. O script lê o campo `has_coupon` do evento e mostra uma
+de três situações:
+
+| Saída | Significado |
+| --- | --- |
+| `aceita cupom: sim` | o evento tem cupons cadastrados — vale testar |
+| `aceita cupom: não (evento sem cupons cadastrados)` | `has_coupon = false`: a lista de cupons do evento está vazia |
+| `aceita cupom: não informado` | a API não trouxe o campo (evento antigo ou resposta diferente) |
+
+Quando o evento declara `has_coupon = false`, **o script para antes de testar** e
+sai com código `4` — nenhum código pode funcionar, porque não há cupom cadastrado
+para valer. Exemplo real: o NOEL Festival (mesma produtora da Intro) está nesse
+estado, e os 44 mil códigos testados no Intro não servem para ele. Para ignorar a
+checagem e testar de qualquer forma, use `--force`.
 
 ### Cupom vale por evento, não por produtora
 
@@ -145,6 +157,7 @@ evento, usando o nome da festa, o line-up, o lote e as campanhas daquele evento.
 | `--url` | — | link do carrinho ou ID do evento (descobre a produtora) |
 | `--event` / `--producer` | Intro Belém | IDs informados manualmente |
 | `--info` | — | mostra os dados do evento e sai, sem testar |
+| `--force` | — | testa mesmo se o evento declarar `has_coupon = false` |
 | `--workers` | `12` | requisições simultâneas (20–30 é o ponto ideal) |
 | `--chunk` | `150` | códigos por lote do `curl` |
 | `--pause` | `1.0` | pausa entre lotes, em segundos |
@@ -177,6 +190,7 @@ INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
 | `1` | erro de configuração: ID de evento inválido ou API indisponível no `--info` |
 | `2` | alguma requisição não concluiu (rede/500) |
 | `3` | API bloqueou por excesso de requisições (HTTP 429) |
+| `4` | evento sem cupons cadastrados (`has_coupon = false`): nada foi testado |
 
 ## Cache e retomada
 
