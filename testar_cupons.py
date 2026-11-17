@@ -68,6 +68,9 @@ def carregar_codigos(arquivos):
         if not p.exists():
             sys.exit(f"arquivo não encontrado: {arq}")
         for linha in p.read_text(encoding="utf-8").splitlines():
+            if linha.lstrip().startswith("#"):
+                continue  # comentário/seção, não é código
+            linha = linha.split("#", 1)[0]  # comentário no fim da linha
             for bruto in linha.replace(",", "\n").replace(";", "\n").splitlines():
                 c = normalizar(bruto)
                 if c and c not in vistos:
