@@ -5,6 +5,7 @@
 #   ./rodar_grande.sh lista.txt "https://cart.ingresse.com/<EVENT_ID>/tickets" [workers]
 #
 # o que faz:
+#   - valida os argumentos e o ambiente antes de começar
 #   - chama o testar_cupons.py em loop até a lista terminar
 #   - se a API bloquear (saída 3), espera e continua de onde parou (usa o cache)
 #   - se houver falha de rede (saída 2), tenta de novo
@@ -13,13 +14,56 @@
 
 set -u
 
-LISTA="${1:?informe o arquivo da lista}"
-URL="${2:?informe a URL do carrinho}"
+erro() { echo "erro: $*" >&2; echo "      (veja o uso: ./rodar_grande.sh --help)" >&2; exit 1; }
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+fi
+
+[ $# -ge 2 ] || erro "faltam argumentos. use: ./rodar_grande.sh lista.txt \"https://cart.ingresse.com/<EVENT_ID>/tickets\" [workers]"
+
+LISTA="$1"
+URL="$2"
 WORKERS="${3:-20}"
 
 BASE="$(cd "$(dirname "$0")" && pwd)"
 NOME="$(basename "$LISTA" .txt)"
 LOG="$BASE/$NOME.log"
+
+# ---------------------------------------------------------------- checagens
+[ -f "$LISTA" ] || erro "arquivo não encontrado: $LISTA (rode na pasta onde está a lista)"
+[ -f "$BASE/testar_cupons.py" ] || erro "testar_cupons.py não está em $BASE"
+command -v python3 >/dev/null 2>&1 || erro "python3 não encontrado no PATH"
+command -v curl >/dev/null 2>&1 || erro "curl não encontrado no PATH"
+
+# curl precisa de --parallel (7.68+)
+if ! curl --help all 2>/dev/null | grep -q -- '--parallel'; then
+    echo "aviso: seu curl não tem --parallel (versão antiga). o teste vai ficar lento." >&2
+    echo "       no Ubuntu/Debian: sudo apt install curl" >&2
+fi
+
+# URL precisa ter o ID do evento
+case "$URL" in
+    *"<EVENT_ID>"*|*"EVENT_ID"*) erro "troque <EVENT_ID> pelo ID real do evento (o trecho da URL do carrinho)" ;;
+    *"://"*) ;;
+    *) erro "faltou a URL do carrinho. use: ./rodar_grande.sh \"$LISTA\" \"https://cart.ingresse.com/<EVENT_ID>/tickets\" [workers]" ;;
+esac
+case "$URL" in
+    *cart.ingresse.com/*) ;;
+    *) echo "aviso: a URL não parece de carrinho da Ingresse: $URL" >&2 ;;
+esac
+
+# arquivo com CRLF (salvo no Windows) quebra o bash
+if head -1 "$BASE/rodar_grande.sh" | grep -q $'\r'; then
+    erro "o script está com terminações de linha do Windows (CRLF). rode: sed -i 's/\\r$//' \"$0\""
+fi
+
+# log precisa ser gravável
+if ! touch "$LOG" 2>/dev/null; then
+    erro "não consegui criar o log em $LOG (sem permissão de escrita?)"
+fi
+
 ESPERA_BLOQUEIO=900      # 15 min quando a API bloqueia
 ESPERA_FALHA=60          # 1 min quando dá falha de rede
 MAX_TENTATIVAS=40
@@ -28,6 +72,7 @@ log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 
 log "lista: $LISTA ($(wc -l < "$LISTA") códigos) | workers: $WORKERS"
 log "url: $URL"
+log "log: $LOG"
 
 for i in $(seq 1 "$MAX_TENTATIVAS"); do
     log "--- tentativa $i"
@@ -66,7 +111,7 @@ done
 
 # resumo final a partir do JSON
 if [ -f "$BASE/$NOME.json" ]; then
-    python3 - "$BASE/$NOME.json" <<'PY'
+    python3 - "$BASE/$NOME.json" <<'PY' | tee -a "$LOG"
 import json, sys
 dados = json.load(open(sys.argv[1]))
 validos = [d for d in dados if d.get("valid")]
