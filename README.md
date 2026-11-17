@@ -60,7 +60,7 @@ código → processo curl → TLS 1,2 s  códigos → 1 processo curl (--paralle
 Medições na mesma lista de 503 códigos, contra a API real:
 
 | Configuração | Tempo | Velocidade |
-| --- | --- | --- |
+|---|---|---|
 | 1 processo `curl` por código, 4 threads | 286 s | 1,7 códigos/s |
 | Lote paralelo, 30 simultâneas | 16,7 s | 30 códigos/s |
 | Lote paralelo, 40 simultâneas | 20,7 s | 24 códigos/s |
@@ -72,7 +72,6 @@ boa é 20–30.
 ## Requisitos
 
 - Python 3.8+ (só biblioteca padrão, sem `pip install`)
-
 - `curl` 7.66+ com suporte a HTTP/2 (`curl --version` deve mostrar `HTTP2`)
 
 ## Instalação
@@ -110,15 +109,43 @@ python3 testar_cupons.py cupons.txt --url "https://cart.ingresse.com/<EVENT_ID>/
 ```
 
 Se preferir informar os IDs na mão:
-
 ```bash
 python3 testar_cupons.py cupons.txt --event OUTRO_ID --producer OUTRO_ID
 ```
+### Arquivo de exemplos
+
+`exemplos/cupons_intro_belem.txt` traz os **51.241 códigos já testados** no
+evento INTRO Belém (19/11/2026), ordenados do mais provável ao menos provável.
+Serve como base para rodar em outro evento da mesma produtora ou para entender
+quais padrões de nome foram tentados.
+
+O arquivo é dividido em seções com comentários:
+
+| Seção | Conteúdo |
+|---|---|
+| 1 | válidos confirmados (2 de 50%, 3 de 10%) e o de 30% que expirou |
+| 2 | parceiro + número e área + `DESCONTO` — os formatos que mais acertaram |
+| 3 | família `HYPE24HS`/`ROMAEVENTOS`, códigos citados nas redes, variações `BUDZONE` |
+| 4 | marcas + desconto, handles de comentaristas, variações `DESCONTO` |
+| 5 | combinações curtas com contexto do evento |
+| 6 | rodadas geradas em série |
+| 7 | listas iniciais, taxa zero e testes diversos |
+
+Linhas que começam com `#` são comentários e são ignoradas na leitura; um `#` no
+fim da linha também é descartado, então dá para anotar ao lado do código:
+
+```
+ROMAEVENTOS      # VALIDO 50%
+AGENDABELEM10
+```
+
+Se for rodar em outro evento, copie o arquivo e ajuste as seções 1 e 2 para os
+cupons daquele evento — as demais servem como lista de tentativa.
 
 ## De onde vêm os IDs de outro evento
 
 | Dado | Onde achar | Observação |
-| --- | --- | --- |
+|---|---|---|
 | `event_id` | URL do carrinho: `cart.ingresse.com/<EVENT_ID>/tickets` | Abra o evento na Ingresse ou o link que a produtora divulga e clique em comprar |
 | `producer_id` | campo `data.organization.id` da resposta de `GET /v1/events/<EVENT_ID>` | O script descobre sozinho com `--url` ou `--event` |
 
@@ -131,7 +158,7 @@ Rode `--info` primeiro. O script lê o campo `has_coupon` do evento e mostra uma
 de três situações:
 
 | Saída | Significado |
-| --- | --- |
+|---|---|
 | `aceita cupom: sim` | o evento tem cupons cadastrados — vale testar |
 | `aceita cupom: não (evento sem cupons cadastrados)` | `has_coupon = false`: a lista de cupons do evento está vazia |
 | `aceita cupom: não informado` | a API não trouxe o campo (evento antigo ou resposta diferente) |
@@ -153,7 +180,7 @@ evento, usando o nome da festa, o line-up, o lote e as campanhas daquele evento.
 ### Opções
 
 | Opção | Padrão | Descrição |
-| --- | --- | --- |
+|---|---|---|
 | `--url` | — | link do carrinho ou ID do evento (descobre a produtora) |
 | `--event` / `--producer` | Intro Belém | IDs informados manualmente |
 | `--info` | — | mostra os dados do evento e sai, sem testar |
@@ -174,7 +201,7 @@ evento, usando o nome da festa, o line-up, o lote e as campanhas daquele evento.
 
 `resultados.csv`:
 
-```
+```csv
 codigo,valido,desconto_pct,tipo,usos,max_usos,max_por_usuario,inicio,fim,status,mensagem
 ROMAEVENTOS,SIM,50,percentage,2,100,2,,,active,válido
 INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
@@ -185,7 +212,7 @@ INTRO60,nao,,,,,,,,,Passkey does not match any available ticket
 ### Códigos de saída
 
 | Código | Significado |
-| --- | --- |
+|---|---|
 | `0` | tudo testado |
 | `1` | erro de configuração: ID de evento inválido ou API indisponível no `--info` |
 | `2` | alguma requisição não concluiu (rede/500) |
@@ -214,14 +241,74 @@ informando o tempo estimado de liberação. Ele não insiste, porque insistir
 prolonga o bloqueio. Se precisar de mais volume, aumente `--pause`, reduza
 `--workers` e rode em horários diferentes.
 
+## Listas grandes (50 mil ou mais)
+
+Para listas desse tamanho, não rode o `testar_cupons.py` direto: use o
+`rodar_grande.sh`, que chama o testador em loop e retoma sozinho quando a API
+bloqueia.
+
+```bash
+chmod +x rodar_grande.sh
+./rodar_grande.sh lista_50k.txt "https://cart.ingresse.com/<EVENT_ID>/tickets" 20
+```
+
+O terceiro argumento é o número de requisições simultâneas (padrão 20). O script:
+
+- roda o testador até a lista terminar
+- em bloqueio (saída 3) espera 15 min e continua de onde parou, pelo cache
+- em falha de rede (saída 2) tenta de novo em 1 min
+- em evento sem cupom (saída 4) para na hora
+- grava tudo em `lista_50k.log` e, no fim, lista os cupons válidos
+
+Para rodar sem travar o terminal (e sobreviver a fechar a janela):
+
+```bash
+nohup ./rodar_grande.sh lista_50k.txt "https://cart.ingresse.com/<EVENT_ID>/tickets" 20 > /dev/null 2>&1 &
+tail -f lista_50k.log          # acompanhar
+```
+
+### Quanto demora
+
+Medido na prática, contra a API da Ingresse:
+
+| `--workers` | Velocidade | 50 mil códigos |
+|---|---|---|
+| 3 | 1–4 códigos/s | 4 a 14 h |
+| 12 | 6–7 códigos/s | ~2 h sem bloqueio |
+| 20–30 | ~10 códigos/s | ~1,5 h, mas bloqueia antes de 1.000 |
+
+Na prática a rajada rápida não compensa: a API libera cerca de 600 a 800
+requisições antes de bloquear por 30 minutos. O ponto de equilíbrio observado foi
+**12 a 20 simultâneas com `--pause 1.5`**, que sustenta 6 a 7 códigos/s sem
+bloqueio — cerca de 2h20 para 50 mil.
+
+### O que importa na máquina
+
+Praticamente nada: o trabalho é espera de rede. O processo usa menos de 100 MB de
+RAM, o cache em disco fica em torno de 200 bytes por código (~10 MB para 50 mil)
+e a CPU fica ociosa. Qualquer máquina com `curl` 7.68 ou superior (por causa do
+`--parallel`) e Python 3.8+ serve.
+
+No Windows, rode dentro do **WSL** (`wsl --install` e depois `sudo apt install
+curl python3`): o `curl.exe` nativo nem sempre traz suporte a `--parallel` e os
+arquivos de configuração gerados usam caminhos POSIX.
+
+### Antes de disparar a lista
+
+1. Rode `--info` na URL e confirme `aceita cupom: sim`.
+2. Teste 5 códigos conhecidos para validar a conexão.
+3. Normalize a lista: um código por linha, sem espaços, sem duplicados.
+
+```bash
+tr -d '\r' < bruta.txt | tr '[:lower:]' '[:upper:]' | sed '/^$/d' | sort -u > lista_50k.txt
+```
+
 ## Testes
 
 O repositório inclui um servidor falso (`mock_api.py`) que imita a API:
 
 - `POST /v1/events/<id>/tickets` — válido para `ROMAEVENTOS` e `HYPE24HSINTRO`, inválido para o resto
-
 - `GET /v1/events/<id>` — devolve os dados do evento, com `organization.id` como produtora
-
 - códigos começando com `RL` recebem 429; com `ERR`, 500
 
 Assim dá para validar mudanças sem gastar requisições reais:
@@ -240,13 +327,11 @@ saída `0`.
 ## Limitações
 
 - Cupons presos a um CPF ou conta específica não validam como visitante (a API
-aceita `user_document` e `user_id`, que o script envia vazios). Se a produção
-distribuiu um código nominal, ele pode funcionar logado mesmo dando inválido aqui.
-
+  aceita `user_document` e `user_id`, que o script envia vazios). Se a produção
+  distribuiu um código nominal, ele pode funcionar logado mesmo dando inválido aqui.
 - O script não compra nada: só consulta a validação do código.
-
 - A API pode mudar sem aviso; se os resultados vierem todos "inválidos" de repente,
-confira com um código que você sabe que funciona.
+  confira com um código que você sabe que funciona.
 
 ## Aviso
 
