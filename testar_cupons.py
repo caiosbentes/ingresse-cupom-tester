@@ -268,6 +268,8 @@ def main():
     ap.add_argument("--event", default=None, help="ID do evento (se não usar --url)")
     ap.add_argument("--producer", default=None, help="ID da produtora (descobre sozinho se omitido)")
     ap.add_argument("--info", action="store_true", help="mostra os dados do evento e sai")
+    ap.add_argument("--force", action="store_true",
+                    help="testa mesmo se o evento declarar que não tem cupom (has_coupon = false)")
     ap.add_argument("--api-base", default=DEFAULT_API, help="base da API (para testes locais)")
     ap.add_argument("--workers", type=int, default=12,
                     help="requisições simultâneas (padrão 12; acima de ~40 a Cloudflare bloqueia)")
@@ -292,16 +294,25 @@ def main():
     if args.info or not args.producer:
         info = descobrir_evento(event, args.api_base, args.timeout)
         if info:
+            # True = tem cupom, False = evento sem nenhum cupom, None = campo ausente
+            cupom_txt = {True: "sim", False: "não (evento sem cupons cadastrados)"}.get(
+                info["has_coupon"], "não informado")
+            passkey_txt = {True: "sim", False: "não"}.get(info["has_passkey"], "não informado")
             log(f"evento: {info['name']} ({info['place'] or 'local não informado'})")
             log(f"produtora: {info['producer_name']} — {info['producer_id']}")
-            log(f"aceita cupom: {'sim' if info['has_coupon'] else 'não informado'} | "
-                f"pede passkey: {'sim' if info['has_passkey'] else 'não'}")
+            log(f"aceita cupom: {cupom_txt} | pede passkey: {passkey_txt}")
         elif args.info:
             sys.exit("não consegui consultar o evento: confira o ID na URL do carrinho "
                      "(cart.ingresse.com/<ID>/tickets) ou se a API está bloqueando.")
 
     if args.info:
         sys.exit(0)
+
+    # evento sem cupom cadastrado: nenhum código pode funcionar, não faz sentido testar
+    if info and info.get("has_coupon") is False and not args.force:
+        log("evento sem cupons cadastrados (has_coupon = false): nenhum código pode ser aceito.")
+        log("nada foi testado. use --force para testar de qualquer forma.")
+        sys.exit(4)
 
     producer = args.producer or (info or {}).get("producer_id") or DEFAULT_PRODUCER
     if not args.producer and info and not info.get("producer_id"):
