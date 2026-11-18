@@ -252,13 +252,20 @@ chmod +x rodar_grande.sh
 ./rodar_grande.sh lista_50k.txt "https://cart.ingresse.com/<EVENT_ID>/tickets" 20
 ```
 
-O terceiro argumento é o número de requisições simultâneas (padrão 20). O script:
+O terceiro argumento é o número de requisições simultâneas (padrão 20; precisa ser
+um inteiro — se não for, o script avisa e sai antes de começar). O script:
 
 - roda o testador até a lista terminar
 - em bloqueio (saída 3) espera 15 min e continua de onde parou, pelo cache
 - em falha de rede (saída 2) tenta de novo em 1 min
 - em evento sem cupom (saída 4) para na hora
-- grava tudo em `lista_50k.log` e, no fim, lista os cupons válidos
+- repete no máximo 40 vezes (`MAX_TENTATIVAS`); se esgotar sem terminar, avisa no
+  log, mostra os válidos encontrados até ali e sai com código `2` — é só rodar de
+  novo para continuar do cache
+- se você interromper com Ctrl+C, registra isso no log antes de sair (o progresso
+  fica salvo no cache)
+- grava tudo em `lista_50k.log`, com data e hora em cada linha, e no fim lista os
+  cupons válidos
 
 Para rodar sem travar o terminal (e sobreviver a fechar a janela):
 
@@ -311,7 +318,26 @@ O repositório inclui um servidor falso (`mock_api.py`) que imita a API:
 - `GET /v1/events/<id>` — devolve os dados do evento, com `organization.id` como produtora
 - códigos começando com `RL` recebem 429; com `ERR`, 500
 
-Assim dá para validar mudanças sem gastar requisições reais:
+### Suíte automatizada
+
+`test_testar_cupons.py` sobe o mock numa porta livre e roda o testador contra ele,
+conferindo os códigos de saída, o resumo e os arquivos CSV/JSON. Usa só a
+biblioteca padrão (mais `curl`, como o resto do projeto) e não toca na API real:
+
+```bash
+python3 -m unittest test_testar_cupons -v
+# ou, se tiver pytest instalado:
+pytest test_testar_cupons.py -v
+```
+
+Cobre: detecção de válidos/inválidos, normalização e remoção de duplicados,
+linhas de comentário, consistência entre CSV e JSON, retomada pelo cache e os
+códigos de saída `2` (falha de rede), `3` (rate limit) e `0` (`--info`). Rode
+antes de abrir um PR.
+
+### Teste manual
+
+Para experimentar na mão, sem gastar requisições reais:
 
 ```bash
 python3 mock_api.py &                     # sobe em 127.0.0.1:8765
